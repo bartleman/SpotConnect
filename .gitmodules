@@ -18,7 +18,7 @@
 [submodule "spotraop/libraop"]
 	path = spotraop/libraop
 	url = https://github.com/bartleman/libraop.git
-	branch = airplay2
+	branch = airplay2-full
 [submodule "spotraop/http-fetcher"]
 	path = spotraop/http-fetcher
 	url = https://github.com/philippe44/http-fetcher

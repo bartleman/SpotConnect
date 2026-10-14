@@ -9,6 +9,15 @@ For AirPlay, the audio can be re-encoded using ALAC or left as raw PCM. Note tha
 
 **Please read carefully the [credentials](#credentials) paragraph to understand how to handle Spotify credentials**
 
+**About this branch (`airplay2-full`)**: it is the AirPlay 2 work proposed in philippe44/SpotConnect#84 and philippe44/libraop#55, arranged so the bridge builds from one clone. The `spotraop/libraop` submodule follows `bartleman/libraop@airplay2-full`, which carries `libraop.a` rebuilt from the AirPlay 2 sources for Linux x86_64, aarch64 and arm (armv7 hard-float) and macOS arm64. SpotConnect links those prebuilt archives rather than compiling libraop, so on any other platform rebuild libraop first:
+```
+cd spotraop/libraop
+make lib STATIC=1 HOST=linux PLATFORM=<x86|x86_64|arm|aarch64|...> CC=gcc CXX=g++
+cp lib/linux/<platform>/libraop.a targets/linux/<platform>/
+```
+Then build spotraop as described in [Compiling from source](#compiling-from-source). Clone with `git clone --recurse-submodules -b airplay2-full https://github.com/bartleman/SpotConnect`.
+
+
 **Update 24/12/2025**
 Spotify has closed some of the WebAPI access, you now need a dedicated application (client) ID and Secret. These are built-in in the binary but not accessible in the source code for obvious reasons. Now, you can use yours either on the command line (-D -S) or in the config file (`<client_id`> and `<client_secret`>. See Spotify's developers platform if you want to use yours. If you rebuild the application yourself and want yours built-in as well, you need to put them in the `client_info.h` file. Please note that after version 0.20.8, `<client_id`> and `<client_secret` tags are not written in the config file, so you will not have them in a reference file you might build.
 
