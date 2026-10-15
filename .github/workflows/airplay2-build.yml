@@ -1,0 +1,144 @@
+# Test builds of the AirPlay 2 branch for people following philippe44/SpotConnect#84.
+# Builds spotraop exactly as the README describes (prebuilt libraop archive from the
+# submodule, nothing copied in), then publishes the binaries as the moving pre-release
+# "airplay2-test" and as the container image ghcr.io/<owner>/spotconnect:airplay2.
+name: airplay2 test build
+
+on:
+  push:
+    branches: [airplay2-full]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-22.04,     platform: x86_64,  arch: amd64 }
+          - { runner: ubuntu-22.04-arm, platform: aarch64, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      P: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submodules (shallow, as in the README)
+        run: |
+          git submodule update -q --init --depth 1
+          (cd common/cspot && git submodule update -q --init --recursive --depth 1)
+          echo "libraop:    $(git -C spotraop/libraop log --oneline -1)"
+          echo "crosstools: $(git -C common/crosstools log --oneline -1)"
+
+      - name: Toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q build-essential cmake libmbedtls-dev python3-protobuf protobuf-compiler python3-setuptools
+
+      - name: Build spotraop
+        run: |
+          cd spotraop && mkdir -p build && cd build
+          cmake .. -DHOST=linux -DPLATFORM=$P
+          make -j4
+          ls -la spotraop-linux-$P spotraop-linux-$P-static
+          echo "AirPlay 2 symbols linked in: $(nm spotraop-linux-$P 2>/dev/null | grep -c raopcl_set_airplay2 || true)"
+          file spotraop-linux-$P-static || true
+
+      - name: Stage
+        run: |
+          mkdir dist
+          cp spotraop/build/spotraop-linux-$P spotraop/build/spotraop-linux-$P-static dist/
+          cp spotraop/build/spotraop-linux-$P-static dist/spotraop-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spotraop-linux-${{ matrix.platform }}
+          if-no-files-found: error
+          path: dist/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes
+        run: |
+          LIBRAOP=$(git rev-parse --short HEAD:spotraop/libraop)
+          CROSSTOOLS=$(git rev-parse --short HEAD:common/crosstools)
+          cat > notes.md <<EOF
+          Test build of the \`airplay2-full\` branch at ${GITHUB_SHA::7} (libraop ${LIBRAOP}, crosstools ${CROSSTOOLS}) for philippe44/SpotConnect#84: AirPlay 2 for HomePods and Apple TV on OS 27. Rebuilt on every push to the branch.
+
+          **Binaries** (Linux, prefer the \`-static\` one, it needs nothing installed):
+
+          \`\`\`
+          chmod +x spotraop-linux-x86_64-static
+          ./spotraop-linux-x86_64-static -Z -I -x spotraop.xml -D <client_id> -S <client_secret> -d all=info
+          \`\`\`
+
+          **Container** (Linux hosts only, host networking is required for mDNS and the AirPlay UDP ports):
+
+          \`\`\`
+          docker run --rm --network host -v \$PWD/config:/config ghcr.io/${GITHUB_REPOSITORY_OWNER}/spotconnect:airplay2 \\
+              -Z -I -x /config/spotraop.xml -D <client_id> -S <client_secret> -d all=info
+          \`\`\`
+
+          Notes:
+          - \`-D\`/\`-S\` are your own Spotify client id and secret, see the README.
+          - The HomePod must allow access: Home app, speaker settings, "Allow Speaker & TV Access" = Everyone, no password.
+          - Only HomePods and Apple TVs on OS 27 take the AirPlay 2 path; everything else plays AirPlay 1 as before. Set \`<airplay2>\` per device in the config to force it (1) or disable it (0).
+          - A working HomePod logs \`AirPlay 2 transient pairing done\`, \`AirPlay 2 session established\`, \`connected to event port\` and then plays. Attach the log to the PR if it does not.
+          EOF
+          cat notes.md
+
+      - name: Publish the moving pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && rm -f spotraop-amd64 spotraop-arm64 && sha256sum spotraop-linux-* > SHA256SUMS && ls -la && cd ..
+          TAG=airplay2-test
+          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" dist/* -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "AirPlay 2 test build ($(date -u +%Y-%m-%d), ${GITHUB_SHA::7})" --notes-file notes.md
+
+  image:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: dist
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/spotconnect:airplay2
+            ghcr.io/${{ github.repository_owner }}/spotconnect:airplay2-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=SpotConnect spotraop, AirPlay 2 test build (philippe44/SpotConnect#84)
